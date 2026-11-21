@@ -13,8 +13,39 @@ st.title("Telecom Customer Churn Prediction")
 st.subheader("Data Pipeline for Customer Churn Analysis")
 
 # Load dataset
-df = pd.read_csv("Telco-Customer-Churn.csv")
+# Load Dataset
+st.sidebar.header("Dataset Selection")
 
+uploaded_file = st.sidebar.file_uploader(
+    "Upload a Telecom Churn CSV Dataset",
+    type=["csv"]
+)
+
+if uploaded_file is not None:
+    df = pd.read_csv(uploaded_file)
+    st.sidebar.success("Uploaded dataset loaded!")
+else:
+    df = pd.read_csv("Telco-Customer-Churn.csv")
+    st.sidebar.info("Using default IBM dataset")
+
+# Dataset Validation
+required_columns = [
+    "customerID", "gender", "SeniorCitizen", "Partner",
+    "Dependents", "tenure", "PhoneService", "MultipleLines",
+    "InternetService", "OnlineSecurity", "OnlineBackup",
+    "DeviceProtection", "TechSupport", "StreamingTV",
+    "StreamingMovies", "Contract", "PaperlessBilling",
+    "PaymentMethod", "MonthlyCharges", "TotalCharges", "Churn"
+]
+
+missing_columns = [
+    col for col in required_columns if col not in df.columns
+]
+
+if missing_columns:
+    st.error("The uploaded dataset is not compatible with this application.")
+    st.write("Missing required columns:", missing_columns)
+    st.stop()
 # Display dataset
 st.header("Customer Dataset")
 st.dataframe(df, use_container_width=True)
