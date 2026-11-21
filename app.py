@@ -2,6 +2,18 @@
 import streamlit as st
 import pandas as pd
 
+from sklearn.model_selection import train_test_split
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix
+)
+
 # Page configuration
 st.set_page_config(
     page_title="Telecom Customer Churn Prediction",
@@ -28,47 +40,39 @@ else:
     df = pd.read_csv("Telco-Customer-Churn.csv")
     st.sidebar.info("Using default IBM dataset")
 
-# Dataset Validation
-required_columns = [
-    "customerID", "gender", "SeniorCitizen", "Partner",
-    "Dependents", "tenure", "PhoneService", "MultipleLines",
-    "InternetService", "OnlineSecurity", "OnlineBackup",
-    "DeviceProtection", "TechSupport", "StreamingTV",
-    "StreamingMovies", "Contract", "PaperlessBilling",
-    "PaymentMethod", "MonthlyCharges", "TotalCharges", "Churn"
-]
+# Churn Target Selection
+st.sidebar.header("Churn Target Configuration")
 
-missing_columns = [
-    col for col in required_columns if col not in df.columns
-]
+target_col = st.sidebar.selectbox(
+    "Select the Churn Target Column",
+    options=df.columns
+)
 
-if missing_columns:
-    st.error("The uploaded dataset is not compatible with this application.")
-    st.write("Missing required columns:", missing_columns)
+target_values = df[target_col].dropna().unique().tolist()
+
+if len(target_values) != 2:
+    st.error("Please select a column containing exactly two churn classes.")
     st.stop()
+
+positive_label = st.sidebar.selectbox(
+    "Select the value representing Churn",
+    options=target_values
+)
+
+# Standardize target values
+df = df.dropna(subset=[target_col]).copy()
+
+df["Churn"] = df[target_col].apply(
+    lambda value: "Yes" if value == positive_label else "No"
+)
+
+st.sidebar.success("Churn target configured successfully!")
 # Display dataset
 st.header("Customer Dataset")
 st.dataframe(df, use_container_width=True)
 
-# Interactive Contract Type Filter
-st.sidebar.header("Dashboard Filters")
+# Dynamic Dashboard
 
-selected_contract = st.sidebar.multiselect(
-    "Select Contract Type",
-    options=df["Contract"].unique(),
-    default=df["Contract"].unique()
-)
-
-filtered_df = df[df["Contract"].isin(selected_contract)]
-# Filtered Churn Rate KPI
-filtered_churn_rate = (filtered_df["Churn"] == "Yes").mean() * 100
-
-st.sidebar.metric(
-    "Filtered Churn Rate",
-    f"{filtered_churn_rate:.2f}%"
-)
-
-# Dataset overview
 st.header("Dataset Overview")
 
 col1, col2, col3 = st.columns(3)
@@ -82,146 +86,140 @@ with col2:
 with col3:
     st.metric("Churned Customers", (df["Churn"] == "Yes").sum())
 
-    # Customer Churn Rate
 churn_rate = (df["Churn"] == "Yes").mean() * 100
 
-st.metric(
-    "Customer Churn Rate",
-    f"{churn_rate:.2f}%"
-)
+st.metric("Customer Churn Rate", f"{churn_rate:.2f}%")
 
-# Churn distribution
+# Dataset Preview
+st.header("Customer Dataset")
+st.dataframe(df, use_container_width=True)
+
+# Churn Distribution
 st.header("Customer Churn Distribution")
 
-churn_counts = df["Churn"].value_counts()
+st.bar_chart(df["Churn"].value_counts())
 
-st.bar_chart(churn_counts)
-
-# Display dataset information
+# Missing Values
 st.header("Data Information")
-
 st.write("Missing Values:")
 st.write(df.isnull().sum())
 
-st.success("Customer churn dataset loaded successfully!")
+# Identify available features
+feature_cols = [
+    col for col in df.columns
+    if col not in [target_col, "Churn"]
+]
 
-# Churn Analysis by Contract Type
-st.header("Churn Analysis by Contract Type")
+# Convert numeric-looking columns
+for col in feature_cols:
+    converted = pd.to_numeric(df[col], errors="coerce")
 
-contract_churn = pd.crosstab(
-    filtered_df["Contract"],
-    filtered_df["Churn"],
-    normalize="index"
-) * 100
-st.bar_chart(contract_churn)
+    if converted.notna().mean() >= 0.8:
+        df[col] = converted
 
-# Churn Analysis by Tenure
-st.header("Churn Analysis by Customer Tenure")
+# Exclude identifier columns
+id_cols = [
+    col for col in feature_cols
+    if col.lower().replace("_", "").replace(" ", "")
+    in ["id", "customerid", "subscriberid", "accountid"]
+]
 
-tenure_churn = filtered_df.groupby("tenure")["Churn"].apply(
-    lambda x: (x == "Yes").mean() * 100
-)
+feature_cols = [
+    col for col in feature_cols if col not in id_cols
+]
 
-st.line_chart(tenure_churn)
+categorical_cols = df[feature_cols].select_dtypes(
+    include=["object", "category", "bool"]
+).columns.tolist()
 
-st.caption(
-    "This chart shows the percentage of customers who churn "
-    "at different tenure durations."
-)
-# Churn Analysis by Internet Service
-st.header("Churn Analysis by Internet Service")
+numerical_cols = df[feature_cols].select_dtypes(
+    include=["number"]
+).columns.tolist()
 
-internet_churn = filtered_df.groupby("InternetService")["Churn"].apply(
-    lambda x: (x == "Yes").mean() * 100
-)
+# Categorical Feature Analysis
+st.header("Categorical Feature Analysis")
 
-st.bar_chart(internet_churn)
+for col in categorical_cols[:5]:
+    st.subheader(f"Churn by {col}")
 
-st.caption(
-    "This chart compares the churn percentage of customers "
-    "using DSL, Fiber Optic, and No Internet Service."
-)
+    chart_data = pd.crosstab(
+        df[col].fillna("Missing"),
+        df["Churn"],
+        normalize="index"
+    ) * 100
 
-# Churn Analysis by Payment Method
-st.header("Churn Analysis by Payment Method")
+    st.bar_chart(chart_data)
 
-payment_churn = filtered_df.groupby("PaymentMethod")["Churn"].apply(
-    lambda x: (x == "Yes").mean() * 100
-)
+# Numerical Feature Analysis
+st.header("Numerical Feature Analysis")
 
-st.bar_chart(payment_churn)
+for col in numerical_cols[:5]:
+    st.subheader(f"Churn by {col}")
 
-st.caption(
-    "This chart compares customer churn percentages across "
-    "different payment methods."
-)
+    chart_df = df[[col, "Churn"]].copy()
+    chart_df[col] = pd.to_numeric(
+        chart_df[col], errors="coerce"
+    )
 
-# Churn Analysis by Monthly Charges
-st.header("Churn Analysis by Monthly Charges")
+    chart_df = chart_df.dropna()
 
-# Divide monthly charges into 10 ranges
-charge_bins = pd.cut(filtered_df["MonthlyCharges"], bins=10)
+    if chart_df[col].nunique() > 1:
+        chart_df["Range"] = pd.qcut(
+            chart_df[col],
+            q=5,
+            duplicates="drop"
+        ).astype(str)
 
-monthly_charges_churn = filtered_df.groupby(
-    charge_bins,
-    observed=False
-)["Churn"].apply(lambda x: (x == "Yes").mean() * 100)
+        churn_analysis = pd.crosstab(
+            chart_df["Range"],
+            chart_df["Churn"],
+            normalize="index"
+        ) * 100
 
-# Convert interval labels into strings
-monthly_charges_churn.index = monthly_charges_churn.index.astype(str)
+        st.bar_chart(churn_analysis)
 
-# Display chart
-st.bar_chart(monthly_charges_churn)
+st.success("Dataset analysis completed successfully!")
 
-st.caption(
-    "This chart shows churn percentages across different "
-    "monthly charge ranges."
-)
-# Data Preprocessing
+
+# Dynamic Data Preprocessing
+
 st.header("Data Preprocessing")
 
-# Create a copy of the dataset
-processed_df = df.copy()
+# Separate features and target
+X = df[feature_cols]
+y = (df["Churn"] == "Yes").astype(int)
 
-# Remove customerID as it is not useful for prediction
-processed_df.drop("customerID", axis=1, inplace=True)
+# Identify numerical and categorical columns
+numerical_cols = X.select_dtypes(
+    include=["number"]
+).columns.tolist()
 
-# Convert TotalCharges to numeric
-processed_df["TotalCharges"] = pd.to_numeric(
-    processed_df["TotalCharges"],
-    errors="coerce"
-)
+categorical_cols = X.select_dtypes(
+    include=["object", "category", "bool"]
+).columns.tolist()
 
-# Handle missing values
-processed_df["TotalCharges"].fillna(
-    processed_df["TotalCharges"].median(),
-    inplace=True
-)
+# Numerical preprocessing
+numerical_pipeline = Pipeline([
+    ("imputer", SimpleImputer(strategy="median")),
+    ("scaler", StandardScaler())
+])
 
-# Convert categorical variables into numerical values
-processed_df = pd.get_dummies(
-    processed_df,
-    drop_first=True,
-    dtype=int
-)
-# Handle any remaining missing values
-processed_df = processed_df.fillna(processed_df.median())
+# Categorical preprocessing
+categorical_pipeline = Pipeline([
+    ("imputer", SimpleImputer(strategy="most_frequent")),
+    ("encoder", OneHotEncoder(handle_unknown="ignore"))
+])
 
+# Combine preprocessing steps
+preprocessor = ColumnTransformer([
+    ("num", numerical_pipeline, numerical_cols),
+    ("cat", categorical_pipeline, categorical_cols)
+])
 
-# Display processed dataset
-st.subheader("Processed Dataset")
-st.dataframe(processed_df, use_container_width=True)
+st.write("Numerical Features:", numerical_cols)
+st.write("Categorical Features:", categorical_cols)
 
-# Display processed dataset dimensions
-col1, col2 = st.columns(2)
-
-with col1:
-    st.metric("Processed Rows", processed_df.shape[0])
-
-with col2:
-    st.metric("Processed Features", processed_df.shape[1])
-
-st.success("Data preprocessing completed successfully!")
+st.success("Dynamic preprocessing configuration completed!")
 
 # Train-Test Split
 st.header("Train-Test Split")
@@ -229,8 +227,8 @@ st.header("Train-Test Split")
 from sklearn.model_selection import train_test_split
 
 # Separate input features and target variable
-X = processed_df.drop("Churn_Yes", axis=1)
-y = processed_df["Churn_Yes"]
+X = df[feature_cols]
+y = (df["Churn"] == "Yes").astype(int)
 
 # Split dataset into training and testing sets
 X_train, X_test, y_train, y_test = train_test_split(
@@ -263,8 +261,11 @@ st.header("Machine Learning Model Training")
 
 from sklearn.linear_model import LogisticRegression
 
-# Initialize the model
-model = LogisticRegression(max_iter=1000)
+# Initialize the complete machine learning pipeline
+model = Pipeline([
+    ("preprocessor", preprocessor),
+    ("classifier", LogisticRegression(max_iter=1000))
+])
 
 # Train the model
 model.fit(X_train, y_train)
@@ -315,114 +316,52 @@ st.dataframe(cm_df, use_container_width=True)
 
 st.success("Model evaluation completed successfully!")
 
-# Interactive Customer Churn Prediction
+# Dynamic Customer Churn Prediction
+
 st.header("Interactive Customer Churn Prediction")
 
 st.write("Enter customer details to predict the likelihood of churn.")
 
-# Create input form
+# Generate input fields dynamically
 with st.form("churn_prediction_form"):
 
-    col1, col2 = st.columns(2)
+    input_data = {}
+    columns = st.columns(2)
 
-    with col1:
-        gender = st.selectbox("Gender", ["Male", "Female"])
-        senior_citizen = st.selectbox("Senior Citizen", [0, 1])
-        partner = st.selectbox("Has Partner", ["Yes", "No"])
-        dependents = st.selectbox("Has Dependents", ["Yes", "No"])
-        tenure = st.slider("Tenure (Months)", 0, 72, 12)
-        phone_service = st.selectbox("Phone Service", ["Yes", "No"])
-        multiple_lines = st.selectbox(
-            "Multiple Lines",
-            ["Yes", "No", "No phone service"]
-        )
-        internet_service = st.selectbox(
-            "Internet Service",
-            ["DSL", "Fiber optic", "No"]
-        )
-        contract = st.selectbox(
-            "Contract",
-            ["Month-to-month", "One year", "Two year"]
-        )
+    for index, col in enumerate(feature_cols):
 
-    with col2:
-        online_security = st.selectbox(
-            "Online Security", ["Yes", "No", "No internet service"]
-        )
-        online_backup = st.selectbox(
-            "Online Backup", ["Yes", "No", "No internet service"]
-        )
-        device_protection = st.selectbox(
-            "Device Protection", ["Yes", "No", "No internet service"]
-        )
-        tech_support = st.selectbox(
-            "Tech Support", ["Yes", "No", "No internet service"]
-        )
-        streaming_tv = st.selectbox(
-            "Streaming TV", ["Yes", "No", "No internet service"]
-        )
-        streaming_movies = st.selectbox(
-            "Streaming Movies", ["Yes", "No", "No internet service"]
-        )
-        paperless_billing = st.selectbox("Paperless Billing", ["Yes", "No"])
-        payment_method = st.selectbox(
-            "Payment Method",
-            [
-                "Electronic check",
-                "Mailed check",
-                "Bank transfer (automatic)",
-                "Credit card (automatic)"
-            ]
-        )
-        monthly_charges = st.number_input(
-            "Monthly Charges", min_value=0.0, value=70.0
-        )
-        total_charges = st.number_input(
-            "Total Charges", min_value=0.0, value=840.0
-        )
+        with columns[index % 2]:
+
+            if col in numerical_cols:
+                default_value = pd.to_numeric(
+                    df[col], errors="coerce"
+                ).median()
+
+                if pd.isna(default_value):
+                    default_value = 0.0
+
+                input_data[col] = st.number_input(
+                    col,
+                    value=float(default_value)
+                )
+
+            elif col in categorical_cols:
+                options = df[col].dropna().unique().tolist()
+
+                if not options:
+                    options = ["Unknown"]
+
+                input_data[col] = st.selectbox(
+                    col,
+                    options=options
+                )
 
     predict_button = st.form_submit_button("Predict Churn")
 
-    # Process customer input and predict churn
+# Make prediction
 if predict_button:
 
-    input_data = {
-        "SeniorCitizen": senior_citizen,
-        "tenure": tenure,
-        "MonthlyCharges": monthly_charges,
-        "TotalCharges": total_charges,
-        "gender_Male": 1 if gender == "Male" else 0,
-        "Partner_Yes": 1 if partner == "Yes" else 0,
-        "Dependents_Yes": 1 if dependents == "Yes" else 0,
-        "PhoneService_Yes": 1 if phone_service == "Yes" else 0,
-        "MultipleLines_Yes": 1 if multiple_lines == "Yes" else 0,
-        "MultipleLines_No phone service": 1 if multiple_lines == "No phone service" else 0,
-        "InternetService_Fiber optic": 1 if internet_service == "Fiber optic" else 0,
-        "InternetService_No": 1 if internet_service == "No" else 0,
-        "OnlineSecurity_Yes": 1 if online_security == "Yes" else 0,
-        "OnlineSecurity_No internet service": 1 if online_security == "No internet service" else 0,
-        "OnlineBackup_Yes": 1 if online_backup == "Yes" else 0,
-        "OnlineBackup_No internet service": 1 if online_backup == "No internet service" else 0,
-        "DeviceProtection_Yes": 1 if device_protection == "Yes" else 0,
-        "DeviceProtection_No internet service": 1 if device_protection == "No internet service" else 0,
-        "TechSupport_Yes": 1 if tech_support == "Yes" else 0,
-        "TechSupport_No internet service": 1 if tech_support == "No internet service" else 0,
-        "StreamingTV_Yes": 1 if streaming_tv == "Yes" else 0,
-        "StreamingTV_No internet service": 1 if streaming_tv == "No internet service" else 0,
-        "StreamingMovies_Yes": 1 if streaming_movies == "Yes" else 0,
-        "StreamingMovies_No internet service": 1 if streaming_movies == "No internet service" else 0,
-        "Contract_One year": 1 if contract == "One year" else 0,
-        "Contract_Two year": 1 if contract == "Two year" else 0,
-        "PaperlessBilling_Yes": 1 if paperless_billing == "Yes" else 0,
-        "PaymentMethod_Credit card (automatic)": 1 if payment_method == "Credit card (automatic)" else 0,
-        "PaymentMethod_Electronic check": 1 if payment_method == "Electronic check" else 0,
-        "PaymentMethod_Mailed check": 1 if payment_method == "Mailed check" else 0
-    }
-
-    input_df = pd.DataFrame([input_data])
-
-    # Align input columns with model training columns
-    input_df = input_df.reindex(columns=X_train.columns, fill_value=0)
+    input_df = pd.DataFrame([input_data], columns=feature_cols)
 
     prediction = model.predict(input_df)[0]
     probability = model.predict_proba(input_df)[0][1]
