@@ -90,9 +90,7 @@ churn_rate = (df["Churn"] == "Yes").mean() * 100
 
 st.metric("Customer Churn Rate", f"{churn_rate:.2f}%")
 
-# Dataset Preview
-st.header("Customer Dataset")
-st.dataframe(df, use_container_width=True)
+
 
 # Churn Distribution
 st.header("Customer Churn Distribution")
@@ -110,6 +108,22 @@ feature_cols = [
     if col not in [target_col, "Churn"]
 ]
 
+# Convert date columns first
+for col in feature_cols.copy():
+    if "date" in col.lower():
+        df[col] = pd.to_datetime(df[col], errors="coerce")
+
+        df[col + "_year"] = df[col].dt.year
+        df[col + "_month"] = df[col].dt.month
+
+        df = df.drop(columns=[col])
+
+# Update feature columns
+feature_cols = [
+    col for col in df.columns
+    if col not in [target_col, "Churn"]
+]
+
 # Convert numeric-looking columns
 for col in feature_cols:
     converted = pd.to_numeric(df[col], errors="coerce")
@@ -120,14 +134,20 @@ for col in feature_cols:
 # Exclude identifier columns
 id_cols = [
     col for col in feature_cols
-    if col.lower().replace("_", "").replace(" ", "")
-    in ["id", "customerid", "subscriberid", "accountid"]
+    if col.lower().replace("_", "").replace(" ", "").replace("-", "")
+    .endswith(("id", "key", "ref", "number", "uuid"))
 ]
 
 feature_cols = [
     col for col in feature_cols if col not in id_cols
 ]
 
+# Validate features
+if not feature_cols:
+    st.error("No usable features found. Please upload a suitable dataset.")
+    st.stop()
+
+# Identify feature types
 categorical_cols = df[feature_cols].select_dtypes(
     include=["object", "category", "bool"]
 ).columns.tolist()
@@ -157,26 +177,25 @@ for col in numerical_cols[:5]:
     st.subheader(f"Churn by {col}")
 
     chart_df = df[[col, "Churn"]].copy()
-    chart_df[col] = pd.to_numeric(
-        chart_df[col], errors="coerce"
-    )
-
+    chart_df[col] = pd.to_numeric(chart_df[col], errors="coerce")
     chart_df = chart_df.dropna()
 
-    if chart_df[col].nunique() > 1:
+    if chart_df[col].nunique() <= 10:
+        chart_df["Range"] = chart_df[col].astype(str)
+    else:
         chart_df["Range"] = pd.qcut(
             chart_df[col],
             q=5,
             duplicates="drop"
         ).astype(str)
 
-        churn_analysis = pd.crosstab(
-            chart_df["Range"],
-            chart_df["Churn"],
-            normalize="index"
-        ) * 100
+    churn_analysis = pd.crosstab(
+        chart_df["Range"],
+        chart_df["Churn"],
+        normalize="index"
+    ) * 100
 
-        st.bar_chart(churn_analysis)
+    st.bar_chart(churn_analysis)
 
 st.success("Dataset analysis completed successfully!")
 
@@ -188,6 +207,11 @@ st.header("Data Preprocessing")
 # Separate features and target
 X = df[feature_cols]
 y = (df["Churn"] == "Yes").astype(int)
+
+# Remove completely empty columns
+X = X.dropna(axis=1, how="all")
+
+feature_cols = X.columns.tolist()
 
 # Identify numerical and categorical columns
 numerical_cols = X.select_dtypes(
@@ -224,13 +248,23 @@ st.success("Dynamic preprocessing configuration completed!")
 # Train-Test Split
 st.header("Train-Test Split")
 
-from sklearn.model_selection import train_test_split
-
-# Separate input features and target variable
 X = df[feature_cols]
 y = (df["Churn"] == "Yes").astype(int)
 
-# Split dataset into training and testing sets
+# Validate dataset
+if len(df) < 10:
+    st.error("Dataset is too small. Please upload at least 10 records.")
+    st.stop()
+
+if y.nunique() != 2:
+    st.error("The dataset must contain both churn and non-churn customers.")
+    st.stop()
+
+if y.value_counts().min() < 2:
+    st.error("Each churn class must contain at least 2 records.")
+    st.stop()
+
+# Split dataset
 X_train, X_test, y_train, y_test = train_test_split(
     X,
     y,
